@@ -1,7 +1,9 @@
 package com.abrah.nightmare
 
 import android.content.Context
+import android.os.Build
 import android.util.Log
+import com.abrah.nightmare.npu.NpuBackend  // ← NUEVO IMPORT
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -35,6 +37,8 @@ object BackendProcess {
     /** ⭐ Where its Hexagon skels ride in the APK — copied into the runtime dir. */
     const val DIT_ASSETS = "ditlibs"
     private const val RUNTIME_DIR = "qnnruntime"
+    /** MediaTek runtime dir name (see NpuBackend.MEDIATK_RUNTIME_DIR for the shared constant). */
+    const val MEDIATEK_RUNTIME_DIR = "mediatek_runtime_dir"
     /** Upstream-compatible package marker for a v-prediction checkpoint. */
     const val V_PRED_MARKER = "V_PRED"
 
@@ -302,6 +306,23 @@ object BackendProcess {
             tmp.setReadable(true, false)
             tmp.setExecutable(true, false)
             check(tmp.renameTo(dst)) { "cannot replace ${dst.absolutePath}" }
+        }
+        // ⭐⭐ MediaTek runtime staging (optional — see NpuBackend for NDA).
+        // If the APK was built without MediaTek support, this is a no-op.
+        val mtkDir = File(context.filesDir, NpuBackend.MEDIATK_RUNTIME_DIR)
+        if (mtkDir.exists() && mtkDir.listFiles()?.isNotEmpty() == true) {
+            for (n in mtkDir.listFiles()!!.map { it.name }) {
+                if (n.endsWith(".so")) {
+                    val dst = File(dir, n)
+                    val tmp = File(dir, "$n.tmp")
+                    context.assets.open("mediateklibs/$n").use { input ->
+                        tmp.outputStream().use { input.copyTo(it) }
+                    }
+                    tmp.setReadable(true, false)
+                    tmp.setExecutable(true, false)
+                    check(tmp.renameTo(dst)) { "cannot replace ${dst.absolutePath}" }
+                }
+            }
         }
         Log.i(TAG, "runtime: ${names.size}/${all.size} libs (${DeviceProbe.caps()}) in ${dir.absolutePath}")
         runtimeUnpacked = dir

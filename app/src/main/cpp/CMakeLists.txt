@@ -94,3 +94,57 @@ target_include_directories(nmqnn PRIVATE ${QNN_INC} ${QNN_INC}/QNN)
 target_link_libraries(nmqnn android log dl)
 
 target_compile_options(nmqnn PRIVATE -O2 -fvisibility=hidden -Wall)
+
+
+# ---------------------------------------------------------------------------
+# libnmmodel.so -- the MediaTek NPU runner (LiteRT + NeuroPilot).
+#
+# A parallel in-process backend with the SAME JNI surface as nmqnn so that no
+# Kotlin caller has to change. Which .so is used is decided at runtime in
+# BackendProcess.startModelBackend() by inspecting Build.SOC_MODEL:
+#
+#   - SoC model starting with "SM" → loadLibrary("nmqnn")    (Qualcomm QNN)
+#   - SoC model starting with "MT" → loadLibrary("nmmodel")  (MediaTek NeuroPilot)
+#
+# This lets a single APK serve both Qualcomm and MediaTek without any branch
+# in the user-facing code — the NPU path on a Dimensity chip is identical from
+# the node's point of view.
+#
+# ⚠⚠ Headers: fetched by tools/fetch_neuropilot_headers.sh from the MediaTek
+# NeuroPilot SDK and staged under app/src/main/cpp/include/ (see
+# tools/stage_mediatek_runtime.ps1). Not committed, exactly as with QNN.
+# ---------------------------------------------------------------------------
+
+set(LITERT_INC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+if(NOT EXISTS ${LITERT_INC}/litert_api.h)
+    message(FATAL_ERROR
+        "LiteRT headers are missing from ${LITERT_INC}.
+"
+        "Run tools/fetch_neuropilot_headers.sh first (fetched, not committed).")
+endif()
+
+# ---------------------------------------------------------------------------
+# Check for MediaTek NeuroPilot Shim header (optional, for NDA builds)
+# ---------------------------------------------------------------------------
+set(SHIM_HEADER ${CMAKE_CURRENT_SOURCE_DIR}/include/NeuroPilotTFLiteShim.h)
+if(EXISTS ${SHIM_HEADER})
+    message(STATUS "Found MediaTek NeuroPilot Shim header, enabling shim support")
+    target_compile_definitions(nmmodel PRIVATE HAS_MEDIATEK_SHIM)
+else()
+    message(STATUS "MediaTek NeuroPilot Shim header not found, building LiteRT-only backend")
+endif()
+
+
+add_library(nmmodel SHARED nmlitert.cpp)
+
+target_include_directories(nmmodel PRIVATE ${LITERT_INC})
+
+# ⚠⚠ NOTHING MediaTek is linked, because the delegate is also unpacked from
+# the app's runtime at runtime (qnnruntime on Qualcomm, mediatektkruntime on
+# MediaTek — see BackendProcess.prepareRuntime). One libnmmodel.so serves every
+# MediaTek gen; the build machine needs no MediaTek binary. The delegate .so
+# files live in the runtime directory, not in apk assets.
+target_link_libraries(nmmodel android log dl)
+
+target_compile_options(nmmodel PRIVATE -O2 -fvisibility=hidden -Wall)
